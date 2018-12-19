@@ -1,9 +1,11 @@
 package main
 
+// Improved with https://en.wikipedia.org/wiki/Summed-area_table
+
 import (
 	"flag"
 	"fmt"
-	"math"
+	"sync"
 )
 
 type coordinate struct {
@@ -13,12 +15,24 @@ type coordinate struct {
 type hologram struct {
 	size         int
 	serialNumber int
+	m            map[coordinate]int
 }
 
 func newHologram(serialNumber int) hologram {
-	return hologram{
-		size:         300,
-		serialNumber: serialNumber,
+	h := hologram{300, serialNumber, make(map[coordinate]int)}
+	h.init()
+	return h
+}
+
+func (h hologram) init() {
+	for x := 1; x <= h.size; x++ {
+		for y := 1; y <= h.size; y++ {
+			c := coordinate{x, y}
+			h.m[c] = h.powerLevelAt(c) +
+				h.m[coordinate{x, y - 1}] +
+				h.m[coordinate{x - 1, y}] -
+				h.m[coordinate{x - 1, y - 1}]
+		}
 	}
 }
 
@@ -32,67 +46,46 @@ func (h hologram) powerLevelAt(c coordinate) int {
 	return level
 }
 
-func (h hologram) fixedFuelSquarePower(c coordinate, squareSize int) int {
-	sum := 0
-	for x := c.x; x < c.x+squareSize; x++ {
-		for y := c.y; y < c.y+squareSize; y++ {
-			sum += h.powerLevelAt(coordinate{x, y})
-		}
-	}
-	return sum
-}
-
-func (h hologram) dynamicFuelSquarePower(c coordinate) (int, int) {
-	var sum, max, size int
-	maxSquareSize := h.size - int(math.Max(float64(c.x), float64(c.y)))
-	for d := 0; d < maxSquareSize; d++ {
-		x, y := c.x, c.y+d
-		for i := 0; i < d*2+1; i++ {
-			sum += h.powerLevelAt(coordinate{x, y})
-			if x < c.x+d {
-				x++
-			} else {
-				y--
-			}
-		}
-
-		if sum > max {
-			max, size = sum, d+1
-		}
-	}
-	return max, size
-}
-
-func (h hologram) findFixedFuelSquarePowerCoordinate(squareSize int) coordinate {
+func (h hologram) findSquareCoordinate(squareSize int) (coordinate, int) {
 	var (
-		result coordinate
-		max    int
+		c   coordinate
+		max int
 	)
 	for x := 1; x <= h.size-squareSize; x++ {
 		for y := 1; y <= h.size-squareSize; y++ {
-			c := coordinate{x, y}
-			if p := h.fixedFuelSquarePower(c, squareSize); p > max {
-				max, result = p, c
+			p := h.m[coordinate{x + squareSize, y + squareSize}] -
+				h.m[coordinate{x, y + squareSize}] -
+				h.m[coordinate{x + squareSize, y}] +
+				h.m[coordinate{x, y}]
+			if p > max {
+				max, c = p, coordinate{x + 1, y + 1}
 			}
 		}
 	}
-	return result
+	return c, max
 }
 
-func (h hologram) findDynamicFuelSquarePowerCoordinate() (coordinate, int) {
+func (h hologram) findDynamicSquareCoordinate() (coordinate, int) {
 	var (
 		xy   coordinate
 		max  int
 		size int
+		wg   sync.WaitGroup
+		mx   sync.Mutex
 	)
-	for x := 1; x <= h.size; x++ {
-		for y := 1; y <= h.size; y++ {
-			c := coordinate{x, y}
-			if p, s := h.dynamicFuelSquarePower(c); p > max {
+	wg.Add(h.size)
+	for s := 1; s <= h.size; s++ {
+		go func(s int) {
+			defer wg.Done()
+			c, p := h.findSquareCoordinate(s)
+			mx.Lock()
+			defer mx.Unlock()
+			if p > max {
 				max, xy, size = p, c, s
 			}
-		}
+		}(s)
 	}
+	wg.Wait()
 	return xy, size
 }
 
@@ -104,10 +97,10 @@ func main() {
 
 	switch *part {
 	case "1":
-		c := h.findFixedFuelSquarePowerCoordinate(3)
+		c, _ := h.findSquareCoordinate(3)
 		fmt.Printf("%d,%d\n", c.x, c.y)
 	case "2":
-		c, n := h.findDynamicFuelSquarePowerCoordinate()
+		c, n := h.findDynamicSquareCoordinate()
 		fmt.Printf("%d,%d,%d\n", c.x, c.y, n)
 	}
 }
